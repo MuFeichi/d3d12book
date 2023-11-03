@@ -31,9 +31,16 @@ GPU可以通过描述符 获取实际的资源数据 + 资源的信息，描述�
 
 View（视图）和 descriptor（描述符）是同义词
 
+常见描述符类型
 
-
-
+| 简称    | 解释                                    |
+| ------- | --------------------------------------- |
+| CBV     | 常量缓冲区视图，constant buffer view    |
+| SRV     | 着色器资源视图，Shader Resource View    |
+| UAV     | 无序访问资源视图，Unordered access view |
+| Sampler | 采样器资源资源，用于纹理贴图的          |
+| RTV     | 渲染目标视图资源，Render Target View    |
+| DSV     | 深度\模板视图资源，Depth Stencil View   |
 
 ## 关于 Component Object Model 与 ComPtr
 
