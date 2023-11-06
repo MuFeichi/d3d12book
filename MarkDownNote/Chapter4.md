@@ -1,3 +1,8 @@
+## 纹理格式
+
+用于描述纹理的数据格式信息
+typeless格式的纹理仅用来预留内存大小，绑定到pipeline之后，具体解释数据类型
+
 ## 交换链与页面翻转
 
 页面翻转，就交换前后缓冲区（Front Buffer 和 Back buffer）的过程
@@ -30,6 +35,59 @@ GPU可以通过描述符 获取实际的资源数据 + 资源的信息，描述�
 如果资源创建时，是typeless格式，那么创建描述符要指明具体类型
 
 View（视图）和 descriptor（描述符）是同义词
+
+常见描述符类型
+
+| 简称    | 解释                                    |
+| ------- | --------------------------------------- |
+| CBV     | 常量缓冲区视图，constant buffer view    |
+| SRV     | 着色器资源视图，Shader Resource View    |
+| UAV     | 无序访问资源视图，Unordered access view |
+| Sampler | 采样器资源资源，用于纹理贴图的          |
+| RTV     | 渲染目标视图资源，Render Target View    |
+| DSV     | 深度\模板视图资源，Depth Stencil View   |
+
+Descriptor Heap：描述符堆。可以看做是数组，描述符的集合。本质上是存放用户程序中某种特定类型描述符的一块内存
+一种类型，创建出一个或者多个描述符堆。
+
+多个描述符--->同一个资源。多个描述符引用同一个资源的不同局部数据
+一个资源可以绑定到单挑pipeline的不同阶段，每个阶段都需要设置独立的描述符
+比如：纹理可以用作渲染目标和着色器资源视图。需要设置RTV和SRV
+无类型格式创建一个资源，可以创建两个描述符，一个指定为浮点，一个指定为整数
+
+## 多重多采样技术
+
+supersampling：SSAA，超采样，4倍与屏幕大小分辨率创建后天缓冲区和深度缓冲区，到屏幕上的时候，周围4个像素一组进行解析（Resolve，降采样DownSample），获得相对平滑的像素颜色
+
+multisampling：多重采样，MSAA，多重采样依旧是会使用4X分辨率，也就是放大进行渲染，然后选取四个像素进行解析，
+不同的是会考虑多边形的内外关系和Depth Stencil的可见性，直接复制到可见性像素中，会节省资源
+
+多重采样案例：
+DXGI_SAMPLE_DESC
+D3D12_MULTISAMPLE_QUALITY_LEVEL_FLAGS
+
+## 功能分级 Feature Level
+
+D3D_FEATURE_LEVEL对应不同D3D版本之间的各种功能
+
+## DirectX图形基础结构
+
+DXGI = DirectX Graphic Infrastructure，DXGI
+底层任务借助一组通用API来进行处理，一般都用DXGI来命名，比如交换链，全屏，适配显示器，显示模式，支持的表面格式信息DXGI_FORMAT
+
+IDXGIFactory，用于创建IDXGISwapChain接口和枚举适配显示器IDXGIAdapter（显卡输出，核心，集显的区别）
+显示器or显示设备：Display Output；Adapter output。IDXGIOutput来表示，每个适配器与一组显示输出关联
+显示设备都有支持的显示模式：DXGI_MODE_DESC; DXGI_RATIONAL;DXGI_MODE_SCANLING_ORDER;DXGI_MODE_SCALING
+
+全屏模式，枚举显示模式用于设置成完全一致的，获取最佳性能
+
+## 功能支持监测
+
+ID3D12Device: CheckFeatureSupport
+
+
+
+
 
 
 
