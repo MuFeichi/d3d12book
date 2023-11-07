@@ -1,3 +1,5 @@
+# Pre 预备知识
+
 ## 纹理格式
 
 用于描述纹理的数据格式信息
@@ -79,17 +81,61 @@ IDXGIFactory，用于创建IDXGISwapChain接口和枚举适配显示器IDXGIAdap
 显示器or显示设备：Display Output；Adapter output。IDXGIOutput来表示，每个适配器与一组显示输出关联
 显示设备都有支持的显示模式：DXGI_MODE_DESC; DXGI_RATIONAL;DXGI_MODE_SCANLING_ORDER;DXGI_MODE_SCALING
 
+ID3D12Device一般指的是某一个显卡适配器，或者说显卡！
+
 全屏模式，枚举显示模式用于设置成完全一致的，获取最佳性能
 
 ## 功能支持监测
 
-ID3D12Device: CheckFeatureSupport
+```c++
+HRESULT ID3D12Device::CheckFeatureSupport(
+D3D12_FEATURE Feature,
+void *pFeatureSupportData,
+UINT FeatureSupportDataSize);ID3D12Device: CheckFeatureSupport
+```
+
+1. Feature：指定希望检测的功能支持类型
+
+   | Feature类型                              | 检测功能                                                     |
+   | ---------------------------------------- | ------------------------------------------------------------ |
+   | D3D12_FEATURE_D3D12_OPTIONS              | 检测当前图形驱动对 Direct3D 12 各种功能的支持情况            |
+   | D3D12-FEATURE_ARCHITECTURE               | 检测图形适配器中 GPU 的硬件体系架构特性。                    |
+   | D3D12_FEATURE_FEATURE_LEVELS             | 检测对功能级别的支持情况。                                   |
+   | D3D12_FEATURE_FORMAT_SUPPORT             | 检测对给定纹理格式的支持情况(例如，指定的格式能否用于渲染目标？或，指定的格式能否用于混合技术？）。 |
+   | D3D12-FEATURE-MULTISAMPLE-QUALITY-LEVELS | 检测对多重采样功能的支持情况。                               |
+
+2. pEeatureSupportData：指向某种数据结构的指针，该数据结构中存在检索到特定功能支持的信息，具体类型取决于Feature
+
+   | Feature类型                              | Data实例                                      |
+   | ---------------------------------------- | --------------------------------------------- |
+   | D3D12_FEATURE_D3D12_OPTIONS              | D3D12_FEATURE_DATA_D3D12_OPTIONS 实例         |
+   | D3D12-FEATURE_ARCHITECTURE               | D3D12_FEATURE_DATA_ARCHITECTURE               |
+   | D3D12_FEATURE_FEATURE_LEVELS             | D3D12_FEATURE_DATA_FEATURE_LEVELS             |
+   | D3D12_FEATURE_FORMAT_SUPPORT             | D3D12_FEATURE_DATA_FORMAT_SUPPORT             |
+   | D3D12-FEATURE-MULTISAMPLE-QUALITY-LEVELS | D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS |
+
+3. FeatureSupportDataSize：传回上述参数中数据结构的大小
 
 
 
+## 资源驻留
 
+D3D12可以主动控制资源在显存中的去留（residency）
+无论资源是否以以及位于显存中，都可以进行管理
+程序应当避免在短时间内于显存中交换进出相同的资源，清出资源在短时间内不会再使用
 
+```c++
+//驻留资源
+HRESULT ID3D12Device::MakeResident(
+UINT NumObjects,
+ID3D12Pageable *const *ppobjects);
+//清出资源
+HRESULT ID3D12Device::Evict(
+UINTNumObjects,
+ID3D12Pageable *const *ppobjects);
+```
 
+第一个参数表示资源数量，第二个参数表示资源数组
 
 
 
@@ -139,3 +185,116 @@ ID3D12GraphicsCommandList
 | ==和!= | 可以和`nullptr`，或者另一个ComPtr实例进行比较                |
 
 C++ 可读性 小技巧： 使用 模板的别名增加可读性![image-20231010212235160](./TextureCache/image-20231010212235160.png)
+
+# CPU与GPU的交互
+
+Direct3D 11 支持两种绘制方式:即立即渲染( immediate rendering，利用 immediate context实现)以及延迟渲染(deferred rendering,利用deferred context实现)。
+前者将缓冲区中的命令直接借驱动层发往GPU 执行，后者则与本文中介绍的命令列表模型相似(但执行命令列表时仍然要依赖immediate context)。
+到了 Direct3D 12 便取消了立即渲染方式,完全采用“命令列表->命令队列”模型，使多个命令列表同时记录命令,借此充分发挥多核心处理器的性能。
+
+## 命令队列与命令列表
+
+GPU维护Command queue，环形缓冲区，ring buffer
+CPU维护Command List，将命令提交到Command queue中
+从list到queue的命令不会被立即执行，新命令会在队列之中等待执行
+![image-20231107114853028](./TextureCache/image-20231107114853028.png)
+
+命令队列：ID3D12CommandQueue
+描述：D3D12_COMMAND_QUEUE_DESC
+创建API: ID3D12Device::CreatCommandQueue
+
+```c++
+Microsoft::WRL::ComPtr<ID3D12CommandQueue> mCommandQueue;
+D3D12 COMMAND QUEUE_DESC queueDesc= {};
+queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+ThrowIfFailed (md3dDevice->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&mCommandQueue)));
+```
+
+![image-20231107115506835](./TextureCache/image-20231107115506835.png)IID_PPV_ARGS作用：获取COM接口ID，将PPType强制转化为Void** 类型
+
+ExecuteCommandLists是ID3D12CommandQueue的接口方法，将List内的命令添加到命令队列中
+
+```c++
+void ID3D12CommandQueue::ExecuteCommandLists(
+// 第二个参数里命令列表数组中命令列表的数量
+UINT Count,
+// 待执行的命令列表数组，指向命令列表数组中第一个元素的指针
+ID3D12CommandList *const *ppCommandLists);
+```
+
+ID3D12GraphicsCommandList 封装了一系列图形渲染命令，实际上继承于ID3D12CommandList。代码示例
+
+```c++
+// mCommandList 为一个指向 ID3D12CommandList 接口的指针
+mCommandList->RSSetViewports(1,&mScreenViewport); // 添加设置ViewPort
+// 清楚RTV
+mCommandList->ClearRenderTargetView (mBackBufferView,Colors::LightSteelBlue, 0, nullptr);
+// 发起绘制调用命令
+mCommandList->DrawIndexedInstanced(36, 1, 0,0, 0);
+```
+
+List创建
+
+```c++
+HRESULT ID3D12Device::CreateCommandList(
+UINT nodeMask,
+D3D12_COMMAND_LIST_TYPE type,
+ID3D12CommandAllocator *pCommandAllocator,
+ID3D12PipelineState *pInitialState,
+REFIID riid,
+void **ppCommandList);
+```
+
+| 参数列表          | 含义                                                         |
+| ----------------- | ------------------------------------------------------------ |
+| nodeMask          | 仅有一个GPU的系统，设置为0，多CPU系统，nodemask是指List相关的物理GPU<br />ID3D12Device::GetNodeCount，GPU适配器节点数量 |
+| type              | List类型                                                     |
+| pCommandAllocator | List相关的Allocator，与上述的type需要保持一致                |
+| pInitialState     | 指定List的渲染流水管线的初始状态。打包类型可以是nullptr      |
+| riid              | 待创建ID3D12CommandList的接口COM ID                          |
+| ppCommandlIST     | 输出指向所建List的指针                                       |
+
+添加完成后，需要再调用ExecuteComm的andLists加入Queue
+命令都添加完毕后，需要结束命令的记录，在加入队列前，一定要关闭记录！！！！！
+
+```c++
+// OrgAPI: ID3D12GraphicsCommandList：：Close
+mCommandList->Close ();
+```
+
+ID3D12CommandAllocator：List内的命令仅仅是索引，实际存放在CommandAllocator上。queue从list中获取命令时，主要引用的是allocator里面的命令。Allocator是由ID3D12Device创建的
+
+```c++
+HRESULT ID3D12Device::CreateCommandAllocator(
+D3D12_COMMAND_LIST_TYPE type,
+REFIID riid,
+void **ppCommandAllocator);
+```
+
+| 参数               | 含义                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| Type               | 命令列表类型，常用两种<br />1. D3D12_COMMAND_LIST_TYPE_DIRECT：GPU直接执行的命令<br />2. D3D12_COMMAND_LIST_TYPE_BUNDLE：命令列表打包bundle。构建List会产生CPU开销<br />D3D12提供优化，将List打包，打包完成(记录完毕)，驱动对命令进行预处理，渲染期间的之间进行优化 |
+| riid               | 待创建ID3D12CommandAllocator接口的COM ID                     |
+| ppCommandAllocator | 输出指向所建命令分配器的指针                                 |
+
+可以创建多个List关联于同一个Allocator，但是不能同时记录command
+当一个list记录时，Allocator中其他的list都是关闭的，保证一个list的命令连续的添加到allocator中
+create或者reset list会处于打开的状态，占用报错如下
+![image-20231107161041874](./TextureCache/image-20231107161041874.png)
+ID3D12GraphicsCommandList::Reset：用于安全的复用list占用的内存来记录新的命令
+
+```c++
+HRESULT ID3D12GraphicsCommandList::Reset(
+ID3D12CommandAllocator *pAllocator,
+ID3D12PipelineState *pInitialState) ;
+```
+
+List恢复为创建时的初始状态，可以复用底层的内存，避免释放重新分配的问题。并且不会影响queue中的命令，因为Allocator中存在的是实际的命令
+
+ID3D12CommandAllocator::Reset：是向GPU提交了一帧的渲染命令后，为了下一帧复用Allocator的内存进行重新设置
+一般参数是Void，vector::clear，内容清零，但是仍然保存有当前的内存占用。
+所以需要在确定GPU执行完Allocator上所有的命令后再进行重置
+
+## CPU与GPU的同步
+
