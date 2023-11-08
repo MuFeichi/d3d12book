@@ -298,3 +298,49 @@ ID3D12CommandAllocator::Reset：是向GPU提交了一帧的渲染命令后，为
 
 ## CPU与GPU的同步
 
+经典问题保证绘制R的P1，之后绘制R的P2。需要保证不被跳过，并且绘制R的P1时，R的数据不被修改![image-20231108152219164](./TextureCache/image-20231108152219164.png)
+强制CPU等待，CPU处理所有命令，达到某个围栏点(Fence point)，刷新命令队列(Flushing the command queue)，
+通过围栏来实现，ID3D12Fence。这个操作会导致CPU空闲
+
+```c++
+HRESULT ID3D12Device::CreateFence(
+	UINT64 InitialValue,
+	D3D12_FENCE_FLAGS Flags,
+	REFIID riid,
+	Void **ppFence);
+
+ThrowIfFailed(md3Device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
+```
+
+UINT64的值是表示围栏点的整数，初始化为0，每需要增加一个值就加一
+ID3D12CommandQueue::Signal从GPU端设置围栏值
+ID3D12Fence::Singal 从CPU端设置围栏值
+
+```c++
+UINT64 mCurrentFence = 0;
+void D3DApp::FlushCommandQueue()
+{
+    //增加围栏值，接下来将命令标记到此围栏点
+	mCurrentFence++;
+	// 向命令队列中添加一条用来设置新围栏点的命令
+	// 由于这条命令要交由 GPU 处理(即由 GPU 端来修改围栏值),所以在GPU 处理完命令队列中此 Signal ()
+	// 的所有命令之前，它并不会设置新的围栏点①
+	ThrowIfFailed (mCommandQueue->Signal (mFence.Get (), mCurrentFence));
+    
+	// 在 CPU 端等待 GPU，直到后者执行完这个围栏点之前的所有命令
+	if (mFence->GetCompletedValue() < mCurrentFence)
+    {
+       	HANDLE eventHandle = CreateEventEx(nullptr, false, false, EVENT_ALL_ACCESS);
+        //若GPU命中当前的围栏(即执行到Signal ()指令,修改了围栏值),则激发预定事件
+        ThrowIfFailed(mFence->SetEventOnCompletion (mCurrentFence, eventHandle));
+        // 等待 GPU 命中围栏，激发事件
+        WaitForSingleObject(eventHandle, INFINITE);
+        CloseHandle(eventHandle); 
+    }
+}
+```
+
+![image-20231108174524429](./TextureCache/image-20231108174524429.png)
+
+
+
