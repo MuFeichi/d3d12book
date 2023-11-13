@@ -186,6 +186,8 @@ ID3D12GraphicsCommandList
 
 C++ 可读性 小技巧： 使用 模板的别名增加可读性![image-20231010212235160](./TextureCache/image-20231010212235160.png)
 
+REFIID、COM ID：也就是指向这个对象指针的唯一接口，类似于GUID，用于确保唯一性的
+
 # CPU与GPU的交互
 
 Direct3D 11 支持两种绘制方式:即立即渲染( immediate rendering，利用 immediate context实现)以及延迟渲染(deferred rendering,利用deferred context实现)。
@@ -342,5 +344,234 @@ void D3DApp::FlushCommandQueue()
 
 ![image-20231108174524429](./TextureCache/image-20231108174524429.png)
 
+## 资源转换
 
+比如RT，防止在写完之前被读取，需要进行状态转换，保证读写不会同时进行。会造成性能下降
+读写同时发生会导致 资源冒险 resource hazard
+
+Command List 设置 转换资源屏障数组(transition resource barrier). D3D12_RESOURCE_BARRIER
+数组一般是为了一个API调用一批资源进行转换使用
+一般构造结构体的辅助函数
+
+```c++
+struct CD3DX12_RESOURCE_BARRIER : public D3D12_RESOURCE_BARRIER
+{
+	// [...] 辅助方法
+	static inline CD3DX12_RESOURCE_BARRIER Transition(
+	_In_ ID3D12Resource* pResource,
+	D3D12_RESOURCE_STATES stateBefore,
+	D3D12_RESOURCE_STATES stateAfter,
+	UINT subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+	D3D12_RESOURCE_BARRIER_FLAGS flags = D3D12_RESOURCE_BARRIER_FLAG_NONE)
+{
+	CD3DX12_RESOURCE_BARRIER result;
+	ZeroMemory(&result, sizeof(result));
+	D3D12_RESOURCE_BARRIER &barrier = result;
+	result.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	result.Flags = flags;
+	barrier.Transition.pResource = pResource;
+	barrier.Transition.StateBefore = stateBefore;
+	barrier.Transition.StateAfter = stateAfter;
+	barrier.Transition.Subresource = subresource;
+	return result;
+}	
+	// [...]其他辅助方法
+};
+```
+
+CD3DX12_RESOURCE_BARRIER结构体的变体，辅助结构变体(Variation)
+
+## 命令与多线程
+
+1. List并不是线程自由对象，多线程不能共享list，也不能调用统一list的方法，每个线程需要各自独立的list
+2. allocator也不是线程自由对象。线程只能使用自己的allocator
+3. queue是线程自由，多线程可以访问同一个queue，同时可以调用queue的方法，每个线程都可以想queue提交自己的list
+4. 初始化时，必须指定并行list最大数量
+
+
+
+# 初始化Direct3D
+
+1. 用 D3D12CreateDevice 函数创建 ID3D12Device 接口实例。
+2. 创建一个 ID3D12Fence 对象，并查询描述符的大小。(CPU与GPU同步)
+3. 检测用户设备对 4X MSAA 质量级别的支持情况。
+4. 依次创建命令队列、命令列表分配器和主命令列表。list，allocator，queue
+5. 描述并创建交换链。IDXGISwapChain
+6. 创建应用程序所需的描述符堆。
+7. 调整后台缓冲区的大小，并为它创建渲染目标视图。
+8. 创建深度/模板缓冲区及与之关联的深度/模板视图。
+9. 设置视口（viewport）和裁剪矩形（scissor rectangle）。
+
+## 1. 创建设备 Device
+
+万物起源device，理解成一个显示适配器（抽象的理解为显卡，或者渲染模拟的显卡）
+有了Device才能创建其他的D3D接口对象
+
+```C++
+HRESULT WINAPI D3D12CreateDevice(
+	IUnknown* pAdapter,
+	D3D_FEATURE_LEVEL MinimumFeatureLevel,
+	REFIID riid, // ID3D12Device的COM ID
+	void** ppDevice);
+```
+
+1. pAdapter:显示适配器，空指针则使用主显示适配器
+2. 最低功能等级，显卡支持的最低的功能等级
+3. riid：ID3D12Device的 COM ID
+4. ppDevice：返回D3D12设备
+
+```c++
+#if defined(DEBUG) || defined (_DEBUG)
+// 启用 D3D12调试层,发生错误是会向VC++输出窗口发送调试信息
+{
+    ComPtr<ID3D12Debug> debugController;
+	ThrowIfFailed (D3D12GetDebugInterface (IID_PPV_ARGS (&debugController) )) ;
+	debugController->EnableDebugLayer () ;
+}
+#endif
+
+ThrowIfFailed (CreateDXGIFactory1 (IID_PPV_ARGS (&mdxgiFactory) ) ) ;
+// 尝试创建硬件设备
+
+HRESULT hardwareResult = D3D12CreateDevice(nullptr // 默认适配器
+, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS (&md3dDevice) );
+
+// 回退至 WARP 设备
+if (FAILED (hardwareResult))
+{
+    ComPtr<IDXGIAdapter> pWarpAdapter;
+    ThrowIfFailed (mdxgiFactory->EnumWarpAdapter (IID_PPV_ARGS (&pWarpAdapter) ) ) ;
+    
+	ThrowIfFailed (D3D12CreateDevice (
+	pWarpAdapter.Get(),
+	D3D_FEATURE_LEVEL_11_0,
+	IID_PPV_ARGS (&md3dDevice) ));
+}
+```
+
+## 2. 创建围栏并获取描述符的大小
+
+描述符在不同的GPU平台的大小不同，需要查询相关信息。然后把描述符的大小缓存起来
+
+```c++
+ThrowIfFailed (md3dDevice->CreateFence (0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&mFence)));
+mRtvDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+mDsvDescriptorSize - md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+mCbvUavDescriptorSize md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+```
+
+## 3. 检测对4X MSAA质量级别得支持
+
+```c++
+D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS msQualityLevels;
+msQualityLevels.Format = mBackBufferFormat;
+msQualityLevels.SampleCount = 4;
+msQualityLevels.Flags = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+msQualityLevels.NumQualityLevels = 0;
+ThrowIfFailed (md3dDevice->CheckFeatureSupport (
+	D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+	&msQualityLevels,
+	sizeof (msQualityLevels)));
+m4xMsaaQuality = msQualityLevels.NumQualityLevels;
+assert(m4xMsaaQuality > 0 && "Unexpected MSAA quality level.");
+```
+
+支持的话总是会大于0
+
+## 4. 创建queue 和 list
+
+```c++
+ComPtr<ID3D12CommandQueue> mCommandQueue;
+ComPtr<ID3D12CommandAllocator> mDirectCmdListAlloc;
+ComPtr<ID3D12GraphicsCommandList> mCommandList;
+void D3DApp::CreateCommandobjects(){
+    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+	queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+	queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+    // 先创建命名队列
+	ThrowIfFailed (md3dDevice->CreateCommandQueue (&queueDesc, IID_PPV_ARGS (&mCommandQueue)));
+	// 创建 allocator
+	ThrowIfFailed (md3dDevice->CreateCommandAllocator(
+        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        IID_PPV_ARGS (mDirectCmdListAlloc.GetAddressOf ())));
+    // 创建list 绑定 allocator
+    ThrowIfFailed (md3dDevice->CreateCommandList(
+		0,
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		mDirectCmdListAlloc.Get(), //关联命令分配器
+		nullptr,// 初始化流水线状态对象 pipeline state object
+		IID_PPV_ARGS (mCommandList.GetAddressOf ())));
+		//首先要将命令列表置于关闭状态。这是因为在第一次引用命令列表时,我们要对它进行重置,而在调用
+		//重置方法之前又需先将其关闭
+	mCommandList->Close () ;
+}
+
+```
+
+不发起绘制指定，不指定pipeline state
+
+## 5. 描述并创建交换链
+
+首先需要创建描述
+
+```c++
+typedef struct DXGI_SWAP_CHAIN_DESC
+{
+    DXGI_MODE_DESC BufferDesc;
+    DXGI_SAMPLE_DESC SampleDesc;
+    DXGI_USAGE BufferUsage;
+    UINT BufferCount;
+    HWND OutputWindow;
+    BOOL Windowed;
+    DXGI_SWAP_EFFECT SwapEffect;
+    UINT Flags;
+}DXGI_SWAP_CHAIN_DESC;
+
+typedef struct DXGI_MODE_DESC{
+    UINT Width;		// 缓冲区分辨率的宽度
+    UINT Height;	// 缓冲区分辨率的高度
+    DXGI_RATIONAL RefreshRate;
+    DXGI_FORMAT Format;		// 缓冲区的显示格式
+    DXGI_MODE_SCANLINE_ORDER ScanlineOrdering;	// 逐行扫描 vs. 隔行扫描
+    DXGI_MODE_SCALING Scaling;	 // 图像如何相对于屏幕进行拉伸  
+}DXGI_MODE_DESC;
+```
+
+| 结构体成员   | 描述                                                         |
+| ------------ | ------------------------------------------------------------ |
+| BufferDesc   | 后台缓冲区属性，仅关注长宽高、像素格式等属性                 |
+| SampleDesc   | 多重采样的质量级别以及对每个像素的采样次数                   |
+| BufferUsage  | 数据渲染至后台缓冲区(即用它作为渲染目标),因此将此参数指定为 DXGI_USAGE_RENDER_TARGET_OUTPUT |
+| BufferCount  | 交换链中所用的缓冲区数量。我们将它指定为2，即采用双缓冲      |
+| OutputWindow | 渲染窗口的句柄                                               |
+| Windowed     | 若指定为true,程序将在窗口模式下运行；如果指定为 false,则采用全屏模式 |
+| SwapEffect   | 指定为 DXGI_SWAP_EFFECT_FLIP_DISCARD                         |
+| Flags        | 可选标志。如果将其指定为 DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,那么,当程序切换为全屏模式时,它将选择最适于当前应用程序窗口尺寸的显示模式。如果没有指定该标志，当程序切换为全屏模式时，将采用当前桌面的显示模式。 |
+
+使用IDXGIFactory::CreateSwapChain 方法创建。创建新的交换链之前，需要摧毁旧的交换链，可以通过不同设置重新创建交换链，并且修改MSAA配置
+
+```c++
+DXGI_FORMAT mBackBufferFormat = DXGI_FORMAT_R8GBBBA8_UNORM;
+
+void D3DApp::CreateSwapChain(){
+    //释放之前所创的交换链,随后再进行重建mSwapChain.Reset () ;
+}
+
+//释放之前所创的交换链,随后再进行重建mSwapChain.Reset () ;
+DXGI_SWAP_CHAIN_DESC sd;
+sd.BufferDesc.Width =mClientWidth;
+sd.BufferDesc.Height = mClientHeight;sd.BufferDesc.RefreshRate.Numerator = 60;sd.BufferDesc.RefreshRate.Denominator = 1;sd.BufferDesc.Format = mBackBufferFormat;
+sd.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;sd.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+sd.SampleDesc.Count = m4xMsaaState ? 4 1;
+sd.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+sd.BufferCount =SwapChainBufferCount;
+sd.OutputWindow = mhMainWnd;
+sd.Windowed-true;
+sd.SwapEffect DXGI_SWAP_EFFECT_ FLIP DISCARD;
+sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;//注意,交换链需要通过命令队列对其进行刷新
+ThrowIfFailed (mdxgiFactory->CreateSwapChain (mCommandQueue.Get (),&sd,
+mSwapChain.GetAddressOf()));
+
+```
 
