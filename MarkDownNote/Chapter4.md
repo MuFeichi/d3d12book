@@ -554,24 +554,76 @@ typedef struct DXGI_MODE_DESC{
 DXGI_FORMAT mBackBufferFormat = DXGI_FORMAT_R8GBBBA8_UNORM;
 
 void D3DApp::CreateSwapChain(){
-    //释放之前所创的交换链,随后再进行重建mSwapChain.Reset () ;
+    //释放之前所创的交换链,随后再进行重建
+	mSwapChain.Reset () ;
+    
+   
+	DXGI_SWAP_CHAIN_DESC sd;
+	sd.BufferDesc.Width = mClientWidth;
+	sd.BufferDesc.Height = mClientHeight;
+    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Denominator = 1;
+    sd.BufferDesc.Format = mBackBufferFormat;
+	sd.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+    sd.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+    sd.SampleDesc.Count = m4xMsaaState?4:1;
+    sd.SampleDesc.Quality = m4xMsaaState?(m4xMsaaQuality - 1):0;
+    sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.BufferCount = SwapChainBufferCount;
+    sd.OutputWindow = mhMainWnd;
+    sd.Windowed = true;
+    sd.SwapEffect = DXGI_SWAP_EFFECT_ FLIP_DISCARD;
+    sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+	//注意,交换链需要通过命令队列对其进行刷新
+    ThrowIfFailed (mdxgiFactory->CreateSwapChain (mCommandQueue.Get (),&sd,
+    mSwapChain.GetAddressOf()));
+}
+```
+
+## 6. 创建描述符堆
+
+ID3D12DescriptorHeap: 表示描述符堆
+ID3D12Device::CreateDescriptorHeap ：创建描述符堆
+
+```c++
+static const int SwapChainBufferCount = 2;// 框架中设定交换用RT为2
+int mCurrentBackBuffer = 0; // 指定框架中的后台缓冲区索引
+
+ComPtr<ID3D12DescriptorHeap> mRtvHeap;
+ComPtr<ID3D12DescriptorHeap> mDsvHeap;
+
+void D3DApp::CreateRtvAndDsvDescriptorHeaps(){
+    D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc;
+	rtvHeapDesc.NumDescriptors = SwapChainBufferCount;
+	rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+	rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+		rtvHeapDesc.NodeMask = 0:
+    ThrowIfFailed (md3dDevice->CreateDescriptorHeap (
+    artvHeapDesc, IID_PPV_ARGS(mRtvHeap.GetAddressOf())));
+    
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc;
+    dsvHeapDesc.NumDescriptors = 1;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    	dsvHeapDesc.NodeMask = 0;
+    ThrowIfFailed (md3dDevice->CreateDescriptorHeap (
+    &dsvHeapDesc, IID PPV ARGS(mDsvHeap.GetAddressOf())));
 }
 
-//释放之前所创的交换链,随后再进行重建mSwapChain.Reset () ;
-DXGI_SWAP_CHAIN_DESC sd;
-sd.BufferDesc.Width =mClientWidth;
-sd.BufferDesc.Height = mClientHeight;sd.BufferDesc.RefreshRate.Numerator = 60;sd.BufferDesc.RefreshRate.Denominator = 1;sd.BufferDesc.Format = mBackBufferFormat;
-sd.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;sd.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
-sd.SampleDesc.Count = m4xMsaaState ? 4 1;
-sd.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
-sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-sd.BufferCount =SwapChainBufferCount;
-sd.OutputWindow = mhMainWnd;
-sd.Windowed-true;
-sd.SwapEffect DXGI_SWAP_EFFECT_ FLIP DISCARD;
-sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;//注意,交换链需要通过命令队列对其进行刷新
-ThrowIfFailed (mdxgiFactory->CreateSwapChain (mCommandQueue.Get (),&sd,
-mSwapChain.GetAddressOf()));
-
+// 句柄来引用描述符，需要包装获取
+D3D12_CPU_DESCRIPTOR_HANDLE D3DApp::CurrentBackBufferView ()const
+{
+	//CD3DX12构造函数根据给定的偏移量找到当前后台缓冲区的 RTV
+	return CD3DX12_CPU_DESCRIPTOR_HANDLE(
+	mRtvHeap->GetCPUDescriptorHandleForHeapStart(),// 堆中的首个句柄
+	mCurrBackBuffer,//偏移至后台缓冲区描述符句柄的索引
+	mRtvDescriptorSize);// 描述符所占字节的大小
+    
+D3D12_CPU_DESCRIPTOR_HANDLE D3DApp::DepthStencilView()const
+{
+    return mDsvHeap->GetCPUDescriptorHandleForHeapStart();
+}
 ```
+
+## 7. 创建渲染目标视图
 
