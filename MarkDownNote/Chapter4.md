@@ -627,3 +627,353 @@ D3D12_CPU_DESCRIPTOR_HANDLE D3DApp::DepthStencilView()const
 
 ## 7. 创建渲染目标视图
 
+Step1：获取交换链中的缓冲区资源
+
+```c++
+HRESULT IDXGISwapChain::GetBuffer(UINT Buffer,REFIID riid,void **ppSurface);
+```
+
+1. Buffer：获取后台缓冲区的索引
+2. riid：ID3D12Resource接口的COM ID
+3. ppSurface：返回一个指定ID3D12Resource接口的指针
+
+GetBuffer会增加 后台缓冲区 COM引用计数，使用后需要释放
+
+Step2：为后台缓冲区创建RTV
+
+```C++
+void ID3D12Device::CreateRenderTargetView(
+ID3D12Resource *pResource, // 指定用作渲染目标de资源
+const D3D12_RENDER_TARGET_VIEW_DESC *pDesc, //RTV描述，描述了数据类型，如果资源创建时已经设置过格式，可设置为空，会用默认的资源格式，后台缓冲区的mipmap都是1
+D3D12_CPU_DESCRIPTOR_HANDLE DestDescriptor); // 引用创建渲染目标视图的描述符句柄
+```
+
+示例
+
+```c++
+ComPtr<ID3D12Resource> mSwapChainBuffer[SwapChainBufferCount];
+CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHeapHandle(mRtvHeap->GetCPUDescriptorHandleForHeapStart ());
+for (UINT i = 0; i < SwapChainBufferCount; i++){
+    //获得交换链内的第i个缓冲区
+	ThrowIfFailed (mSwapChain->GetBuffer(i, IID_PPV_ARGS(&mSwapChainBuffer[i])));
+	// 为此缓冲区创建一个 RTV
+    md3dDevice->CreateRenderTargetView (mSwapChainBuffer[i].Get(), nullptr, rtvHeapHeadle);
+    // 偏移到描述符堆中的下一个缓冲区
+	rtvHeapHandle.Offset(1, mRtvDescriptorSize);
+}
+```
+
+## 8 创建 Depth Stencil  Buffer and View
+
+本质上是2D纹理，需要使用创建一般资源的方式创建
+
+```c++
+typedef struct D3D12_RESOURCE_DESC
+{
+    D3D12_RESOURCE_DIMENSION Dimension;
+    UINT64 Alignment;
+    UINT64 Width;
+    UINT Height;
+    UINT16 DepthOrArraySize;
+    UINT16 MipLevels;
+    DXGI_FORMAT Format:
+    DXGI_SAMPLE_DESC SampleDesc;
+    D3D12_TEXTURE_LAYOUT Layout;
+    D3D12_RESOURCE_MTSC_FLAG Misc Flags;
+}D3D12_RESOURCE_DESC;
+
+```
+
+| 变量成员                 | 含义                                                         |
+| ------------------------ | ------------------------------------------------------------ |
+| Dimension                | 枚举类型，用于指定资源维度，texture1-3D，Buffer和 unknown类型 |
+| Alignment、Width、Height | 对齐方式可以是 0、4KB、64KB 或 4MB 之一、宽度、高度          |
+| DepthOrArraySize         | 纹理深度或者数组的大小                                       |
+| MipLevels                | mip层级，一般对于DS来说都是只有一个                          |
+| Format                   | 纹理格式                                                     |
+| SampleDesc               | 多重采样的质量级别以及每个像素的采样次数                     |
+| Layout                   | 纹理布局，如何排列存放数据格式，目前设置为UNKNOWN            |
+| Flags                    | 标志，指定一些特殊的资源作用，DS需要指定为D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL |
+
+GPU的资源都是Heap中，本质是GPU的显存块，CreateCommmittedResource，创建堆和资源，并且把资源放在堆中
+
+```C++
+HRESULT ID3D12Device::CreateCommittedResource(
+	const D3D12_HEAP_PROPERTIES *pHeapProperties,
+    D3D12_HEAP_FLAG HeapFlags,
+    const D3D12_RESOURCE_DESC *pResourceDesc,
+    D3D12_RESOURCE_STATES InitialResourceState,
+    const D3D12_CLEAR_VALUE *pOptimizedClearValue,
+    REFIID riidResource,
+	void **ppvResource);
+	
+typedef struct D3D12_HEAP_PROPERTIES {
+    D3D12_HEAP_TYPE Type;
+    D3D12_CPU_PAGE_PROPERTIES CPUPageProperties;
+    D3D12_MEMORY_POOL MemoryPoolPreference;
+    UINT CreationNodeMask;
+    UINT VisibleNodeMask;
+} D3D12_HEAP_PROPERTIES;
+```
+
+| 变量                 | 描述                                                         |
+| -------------------- | ------------------------------------------------------------ |
+| pHeapProperties      | 堆属性，简单来说就是堆的分类，<br />D3D12_HEAP_TYPE_DEFAULT:默认，仅GPU可访问，比如DS<br />D3D12_HEAP_TYPE_UPLOAD:上传堆，资源都是从CPU发送到GPU的<br />D3D12_HEAP_TYPE_READBACK:回传对，CPU可以读取的，共享访问区<br />D3D12_HEAP_TYPE_CUSTOM:高级功能自定义堆 |
+| HeapFlags            | [堆是否可以包含纹理，以及资源是否在适配器之间共享](https://learn.microsoft.com/zh-cn/windows/win32/api/d3d12/ne-d3d12-d3d12_heap_flags)<br />一般是None |
+| pResourceDesc        | 指向资源描述实例的指针，用于描述待创建资源                   |
+| InitialResourceState | 资源初始化状态，正式版描述变为State<br />https://learn.microsoft.com/zh-cn/windows/win32/api/d3d12/ne-d3d12-d3d12_resource_states<br />初始为COMMON转化为DEPTH_WRITE |
+| pOptimizedClearValue | D3D12_CLEAR_VALUE结构体，[用于优化特定资源的清除操作的值。](https://learn.microsoft.com/zh-cn/windows/win32/api/d3d12/ns-d3d12-d3d12_clear_value)<br />可以指定加速，不加速就设置为nullptr |
+| riidResource         | ID3D12Resource的接口COM ID                                   |
+| ppvResource          | ID3D12Resource指针，指向新建资源                             |
+
+View的创建流程
+
+```c++
+// Create the depth/stencil buffer and view.
+    D3D12_RESOURCE_DESC depthStencilDesc;
+	depthStencilDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    depthStencilDesc.Alignment = 0;
+    depthStencilDesc.Width = mClientWidth;
+    depthStencilDesc.Height = mClientHeight;
+    depthStencilDesc.DepthOrArraySize = 1;
+    depthStencilDesc.MipLevels = 1;
+    depthStencilDesc.Format = mDepthStencilFormat;
+    depthStencilDesc.SampleDesc.Count = m4xMsaaState?4:1;
+	depthStencilDesc.SampleDesc.Quality = m4xMsaaState?(m4xMsaaQuality - 1):0;
+	depthStencilDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+	depthStencilDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
+	D3D12_CLEAR_VALUE optClear;
+    optClear.Format = mDepthStencilFormat;
+    optClear.DepthStencil.Depth = 1.0f;
+    optClear.DepthStencil.Stencil = 0;
+
+ThrowIfFailed(md3dDevice->CreateCommittedResource(
+	&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+	D3D12_HEAP_FLAG_NONE,
+	&depthStencilDesc,
+	D3D12_RESOURCE_STATE_COMMON,
+	&optClear,
+	IID_PPV_ARGS(mDepthStencilBuffer.GetAddressOf())));
+
+// 利用资源的格式，为整个资源的第0层mip创建描述符	
+md3dDevice->CreateDepthStencilView(
+    mDepthStencilBuffer.Get(),
+    nullptr, // 已经在上面的 depthStencilDesc制定了具体的格式，不需要进行再次指定，nullptr表示用默认的
+    DepthStencilView());
+
+// 资源状态转换
+mCommandList->ResourceBarrier(
+    1,
+    &CD3DX12_RESOURCE_BARRIER::Transition(
+    mDepthStencilBuffer.Get(),
+    D3D12_RESOURCE_STATE_COMMON,
+    D3D12_RESOURCE_STATE_DEPTH_WRITE));
+
+explicit CD3DX12_HEAP_PROPERTIES( D3D12_HEAP_TYPE type, UINT creationNodeMask = 1, UINT nodeMask = 1 )
+{
+    Type = type;
+    CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    CreationNodeMask = creationNodeMask;
+    VisibleNodeMask = nodeMask;
+}
+```
+
+## 9.ViewPort Set
+
+后台缓冲区中的某一块叫做viewport，viewport ≤ 后台缓冲区 RenderTarget的大小
+
+```c++
+typedef struct D3D12_VIEWPORT {
+    FLOAT TopLeftX; // 通过左上角来指定绘制范围
+    FLOAT TopLeftY;
+    FLOAT Width;
+    FLOAT Height;
+    FLOAT MinDepth; // 存放的深度值都是0-1，这个用来remap 到 min - max
+    FLOAT MaxDepth;
+} D3D12_VIEWPORT;
+
+D3D12_VIEWPORT vp;
+vp.TopLeftX = 0.0f;
+vp.TopLeftY = 0.0f;
+vp.Width = static_cast<float>(mClientWidth);
+vp.Height = static_cast<float>(mClientHeight);
+vp.MinDepth = 0.0f;
+vp.MaxDepth = 1.0f;
+// 第一个参数是绑定viewport的数量，第二个指向饰扣数组的指针，List重置，viewport也会重置
+mCommandList->RSSetViewports(1, &vp); 
+```
+
+## 10. 设置剪裁矩形
+
+对于后台缓冲区设置一个剪裁矩形，矩形外的像素都会被剔除，不会光栅会
+
+```C++
+typedef struct tagRECT
+{
+    LONG left;
+    LONG top;	
+    LONG right;
+    LONG bottom;
+} RECT;
+
+mScissorRect = { 0, 0, mClientWidth/2, mClientHeight/2};
+//单个RT不能使用多个剪裁矩形，多剪裁矩形需要对多个RT使用
+mCommandList->RSSetScissorRects(1, &mScissorRect);
+```
+
+
+
+
+
+# 计时器与动画
+
+帧率的计算
+
+## 性能计时器 The Performance Timer
+
+性能计时器：Performance Counter，时间单位叫做计数，Counter
+
+```c++
+// 查询当前的时刻值，count为单位，是64位的整数
+__int64 currTime;
+QueryPerformanceCounter((LARGE_INTEGER*)&currTime);
+
+// 查询当前的频率，count/秒
+__int64 countsPerSec;
+QueryPerformanceFrequency((LARGE_INTEGER*)&countsPerSec;
+                          
+// count 与秒的单位转换
+mSecondsPerCount = 1.0 / (double)countsPerSec;
+
+// 时刻计数值与秒的单位变化
+valueInSecs = valueInCounts * mSecondsPerCount;                     
+```
+
+一般来说，单词调用没有什么意义，一般使用两次间隔的相对差值，而非单词计数器返回的值来计算
+
+```C++
+__int64 A = 0;
+QueryPerformanceCounter((LARGE_INTEGER*)&A);
+/* Do work */
+__int64 B = 0;
+QueryPerformanceCounter((LARGE_INTEGER*)&B);
+
+TimeToWork = (B–A)*mSecondsPerCount
+```
+
+DX12内有自己的封装，需要找下文档API
+
+## 游戏计时器类
+
+```C++
+class GameTimer{
+public:
+    GameTimer();
+    float TotalTime()const; // in seconds
+    float DeltaTime()const; // in seconds
+    void Reset(); // 开始消息渲染之前调用
+    void Start(); // 接触计时器暂停时调用
+    void Stop(); // 暂停计时器时调用
+    void Tick(); // 每一帧调用
+private:
+    double mSecondsPerCount;
+    double mDeltaTime;
+    __int64 mBaseTime;
+    __int64 mPausedTime;
+    __int64 mStopTime;
+    __int64 mPrevTime;
+    __int64 mCurrTime;
+    
+    bool mStopped;
+};
+
+ //构造函数用于查询计时器频率
+    GameTimer::GameTimer(): mSecondsPerCount(0.0), mDeltaTime(-1.0),mBaseTime(0),
+    mPausedTime(0), mPrevTime(0), mCurrTime(0),	mStopped(false)
+    {
+        __int64 countsPerSec;
+        QueryPerformanceFrequency((LARGE_INTEGER*)&countsPerSec);
+        mSecondsPerCount = 1.0 / (double)countsPerSec;
+    }
+```
+
+## 帧间间隔
+
+```C++
+void GameTimer::Tick(){
+	if( mStopped ){
+        mDeltaTime = 0.0;
+        return;
+	}
+    
+    // 获得本帧开始显示的时刻
+    __int64 currTime;
+    QueryPerformanceCounter((LARGE_INTEGER*)&currTime);
+    mCurrTime = currTime;
+    // 本帧与前一帧的差值
+    mDeltaTime = (mCurrTime - mPrevTime)*mSecondsPerCount;
+    // 准备计算本帧与下一帧的差值
+    mPrevTime = mCurrTime;
+    // 时间差非负值，如果计算两帧是检查的过程中切换到另一个处理器，就会出现
+    if(mDeltaTime < 0.0){
+        mDeltaTime = 0.0;
+    }
+}
+    
+float GameTimer::DeltaTime()const{
+    return (float)mDeltaTime;
+}
+```
+
+Tick函数用于消息循环中
+
+```C++
+int D3DApp::Run()
+{
+	MSG msg = {0};
+	mTimer.Reset();
+	while(msg.message != WM_QUIT)
+	{
+    	//如果有窗口消息就被处理
+        if(PeekMessage( &msg, 0, 0, 0, PM_REMOVE ))
+        {
+            TranslateMessage( &msg );
+            DispatchMessage( &msg );
+    	}
+	 	// 否则执行动画游戏逻辑
+		else
+		{
+            mTimer.Tick();
+            if( !mAppPaused ) // 暂停的话就禁止100s
+            {
+                CalculateFrameStats();
+                Update(mTimer);// 每一帧计算间隔，根据前一帧的花费时间对场景进行更新
+                Draw(mTimer);
+            }
+            else
+            {
+                Sleep(100);
+		   }	
+		}
+	}
+    return (int)msg.wParam;
+}
+
+// Reset 用于初始化mPrevTime消息循环开始前，需要Reset
+void GameTimer::Reset()
+{
+    __int64 currTime;
+    QueryPerformanceCounter((LARGE_INTEGER*)&currTime);
+    mBaseTime = currTime;
+    mPrevTime = currTime;
+    mStopTime = 0;
+    mStopped = false;
+}
+
+```
+
+
+
+## Total time 总时间
+
