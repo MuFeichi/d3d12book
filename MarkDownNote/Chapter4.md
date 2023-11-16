@@ -977,3 +977,124 @@ void GameTimer::Reset()
 
 ## Total time 总时间
 
+总时间，应用程序开始不包含暂停时间的时间总和
+<img src="./TextureCache/image-20231116143121477.png" alt="image-20231116143121477" style="zoom:80%;" /><img src="./TextureCache/image-20231116144016413.png" alt="image-20231116144016413" style="zoom:100%;" />
+
+```C++
+__int64 mBaseTime; 	// 应用开始的时刻
+__int64 mPausedTime; // 暂停时间的综合
+__int64 mStopTime; // 计时器停止暂停的时刻
+
+void GameTimer::Stop()
+{
+    // 如果已经停止了，就什么都不做
+    if( !mStopped )
+    {
+        __int64 currTime;
+        QueryPerformanceCounter((LARGE_INTEGER*)&currTime);
+	   // 停止的话，保存时刻，并且指示计时器停止
+        mStopTime = currTime;
+        mStopped = true;
+    }
+}
+void GameTimer::Start()
+{
+	__int64 startTime;
+	QueryPerformanceCounter((LARGE_INTEGER*)&startTime);
+    if( mStopped )
+    {
+        // 累加暂停时间
+        mPausedTime += (startTime - mStopTime);
+        // 在重新开始计时器之前，前一帧的mPrevTime无效的，需要重置为当前
+        mPrevTime = startTime;
+        // 取消保存停止时刻
+        mStopTime = 0;
+        mStopped = false;
+	}
+}
+
+// 计算总时间
+float GameTimer::TotalTime()const
+{
+    // 如果处于停止，忽略本次stoptime到currenttime这款时间，
+    // 如果之前出现过暂停的情况，也不该统计mStoptime - mBaseTime
+    // 可以从mStoptime - mPausetime
+    //					前一次暂停时间
+    //                   |<––--------–—>|
+    // –----*––––--------*––––----------*––-------------*–––—------------------*––> time
+    //   mBaseTime                  startTime        mStopTime 			  mCurrTime
+    if( mStopped )
+    {
+        return (float)(((mStopTime - mPausedTime) - mBaseTime)*mSecondsPerCount);
+    }
+    // 不能统计 mCurrTime - mBaseTime 内暂停的时间;从mCurrTime - mPauseTime
+    // (mCurrTime - mPausedTime) - mBaseTime
+    //								  
+    //                   			   |<––-暂停时间—>|
+    // –----*––––--------*––––----------*––-----------*–––—------------------*––> time
+    //   mBaseTime                  startTime        mStopTime 			  mCurrTime
+    else
+    {
+        return (float)(((mCurrTime - mPausedTime)- mBaseTime)*mSecondsPerCount);
+    }
+}
+```
+
+# 应用程序框架
+
+
+
+# 调试D3D应用程序
+
+开启调试模式需要启动调试层 debugController->EnableDebugLayer()
+D3D会把调试信息发到VC++输出窗口
+
+大多数D3D的函数会返回 HRESULT错误码。
+示例的错误处理机制的：检测到失败，抛出异常，显示出错的错误码，函数名，文件名，以及发生错误的行号
+
+```c++
+class DxException
+{
+public:
+    DxException() = default;
+    DxException(HRESULT hr, const std::wstring& functionName, const std::wstring& filename, int lineNumber);
+    std::wstring ToString()const;
+    HRESULT ErrorCode = S_OK; // 错误码
+    std::wstring FunctionName; // 函数名
+    std::wstring Filename; // 文件名
+    int LineNumber = -1; // 行数
+};
+
+// hr_ 是 错误码，应用自动报出，L#X转换参数为Unicode字符串，也就是(X)内容
+// __FILE__ __LINE__ 文件与行数，通过宏获取
+#ifndef ThrowIfFailed
+#define ThrowIfFailed(x) \
+{ \
+    HRESULT hr__ = (x); \
+    std::wstring wfn = AnsiToWString(__FILE__); \
+    if(FAILED(hr__)) { throw DxException(hr__, L#x, wfn, __LINE__); } \	
+} 
+#endif
+
+// 使用示例
+ThrowIfFailed(md3dDevice->CreateCommittedResource(
+    &CD3D12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+    D3D12_HEAP_MISC_NONE,
+    &depthStencilDesc,
+    D3D12_RESOURCE_USAGE_INITIAL,
+    IID_PPV_ARGS(&mDepthStencilBuffer)));
+// 程序逻辑都放在try catch块中，通过MessageBox出弹窗报错
+try
+{
+    InitDirect3DApp theApp(hInstance);
+    if(!theApp.Initialize())
+    	return 0;
+    return theApp.Run();
+}
+catch(DxException& e)
+{
+    MessageBox(nullptr, e.ToString().c_str(), L"HRFailed", MB_OK);
+    return 0;
+}
+```
+
