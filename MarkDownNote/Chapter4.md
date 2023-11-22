@@ -1042,7 +1042,16 @@ float GameTimer::TotalTime()const
 
 # 应用程序框架
 
+InitDirect3DApp是D3DApp的子类，都会重写六个函数用于实现不同的目的
+initialize、Resize，Update，Draw
+MsgProc
 
+程序入口是 WinMain，用于启动整体的运行程度
+
+1. 调用init在, winmain中，用于激活D3D相关的初始化，初始化完成后，执行run的逻辑，即每帧进行的动作
+2. init中，分为三个部分，首先是初始窗口 main window相关，然后是初始D3D，上一节初始化的10点内容，之后调用一次OnResize，也就是屏幕大小适配
+3. main windows，初始化窗口相关的内容
+4. D3D
 
 # 调试D3D应用程序
 
