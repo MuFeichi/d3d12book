@@ -30,23 +30,23 @@ public:
 
     static D3DApp* GetApp();
     
-	HINSTANCE AppInst()const;
-	HWND      MainWnd()const;
-	float     AspectRatio()const;
+	HINSTANCE AppInst()const; //´æÈ¡º¯Êı£¬ÓÃÓÚ·µ»ØÓ¦ÓÃ³ÌĞòÊµÀı
+	HWND      MainWnd()const; //´æÈ¡º¯Êı£¬ÓÃÓÚ·µ»ØÖ÷´°¿Ú¾ä±ú
+	float     AspectRatio()const; // ºóÌ¨»º³åÇøµÄ¿í¸ß±È
 
-    bool Get4xMsaaState()const;
-    void Set4xMsaaState(bool value);
+    bool Get4xMsaaState()const;  //ÊÇ·ñÊ¹ÓÃMSAA
+    void Set4xMsaaState(bool value); // ÉèÖÃMSAAµÄÏà¹Ø¹¦ÄÜ
 
-	int Run();
+	int Run(); //Run·â×°µÄÊÇÓ¦ÓÃ³ÌĞòµÄÏûÏ¢Ñ­»·, ´¦ÀíwindowsÏûÏ¢ or Ö´ĞĞäÖÈ¾ÈÎÎñ
  
-    virtual bool Initialize();
-    virtual LRESULT MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+    virtual bool Initialize(); // ¿ò¼Ü·½·¨¡£³õÊ¼»¯£¬windowºÍd3d 
+    virtual LRESULT MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam); // win32ÏûÏ¢´¦Àí
 
 protected:
-    virtual void CreateRtvAndDsvDescriptorHeaps();
-	virtual void OnResize(); 
-	virtual void Update(const GameTimer& gt)=0;
-    virtual void Draw(const GameTimer& gt)=0;
+    virtual void CreateRtvAndDsvDescriptorHeaps(); // ´´½¨ÃèÊö·û¶Ñ
+	virtual void OnResize();  // ÍÏ×§window´°¿Ú´óĞ¡£¬½øĞĞËõ·Å£¬»áµ÷ÕûD3DÏà¹ØÊôĞÔ
+	virtual void Update(const GameTimer& gt)=0; // ¸üĞÂD3D³ÌĞòµÄÉèÖÃ
+    virtual void Draw(const GameTimer& gt)=0; // ÓÃÓÚ»æÖÆÏà¹ØµÄÔªËØ£¬
 
 	// Convenience overrides for handling mouse input.
 	virtual void OnMouseDown(WPARAM btnState, int x, int y){ }
@@ -55,60 +55,63 @@ protected:
 
 protected:
 
-	bool InitMainWindow();
-	bool InitDirect3D();
-	void CreateCommandObjects();
-    void CreateSwapChain();
+	bool InitMainWindow(); // ³õÊ¼»¯Ó¦ÓÃ³ÌĞò´°¿Ú
+	bool InitDirect3D(); // ³õÊ¼»¯D3D3
+	void CreateCommandObjects(); // ´´½¨queue£¬listallocator£¬list
+    void CreateSwapChain(); // ´´½¨½»»»Á´
 
-	void FlushCommandQueue();
+	void FlushCommandQueue(); //Ç¿ÖÆCPUµÈ´ıGPU£¬ÖªµÀGPU´¦ÀíÍêqueueÖĞµÄÃüÁî
 
-	ID3D12Resource* CurrentBackBuffer()const;
-	D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView()const;
-	D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView()const;
+	ID3D12Resource* CurrentBackBuffer()const; // ·µ»Ø ½»»»Á´ ºóÌ¨»»»º³åÇøµÄ RT
+	D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferView()const; // ·µ»Øµ±Ç°»º³åÇø×ÊÔ´µÄÃèÊö·û
+	D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView()const; // ·µ»ØDSÃèÊö·û
 
-	void CalculateFrameStats();
+	void CalculateFrameStats(); // ¼ÆËã FPS£¬ºÍÖ¡ºÄÊ±
 
-    void LogAdapters();
-    void LogAdapterOutputs(IDXGIAdapter* adapter);
-    void LogOutputDisplayModes(IDXGIOutput* output, DXGI_FORMAT format);
+    void LogAdapters(); // Ã¶¾ÙÏµÍ³ÖĞµÄËùÓĞÊÊÅäÆ÷
+    void LogAdapterOutputs(IDXGIAdapter* adapter); // Ã¶¾ÙÖ¸¶¨ÊÊÅäÆ÷µÄÈ«²¿ÏÔÊ¾Êä³ö
+    void LogOutputDisplayModes(IDXGIOutput* output, DXGI_FORMAT format); // Ã¶¾ÙÄ³¸öÏÔÊ¾Æ÷¶ÔÓÚÌØ¶¨¸ñÊ½Ö§³ÖµÄÏÔÊ¾Ä£Ê½
 
 protected:
 
-    static D3DApp* mApp;
+    static D3DApp* mApp; // ClassµÄÖ¸Õë
 
-    HINSTANCE mhAppInst = nullptr; // application instance handle
-    HWND      mhMainWnd = nullptr; // main window handle
-	bool      mAppPaused = false;  // is the application paused?
-	bool      mMinimized = false;  // is the application minimized?
-	bool      mMaximized = false;  // is the application maximized?
-	bool      mResizing = false;   // are the resize bars being dragged?
-    bool      mFullscreenState = false;// fullscreen enabled
+    HINSTANCE mhAppInst = nullptr; // Ó¦ÓÃ³ÌĞòÊµÀıapplication instance handle
+    HWND      mhMainWnd = nullptr; // Ö÷´°¿Ú¾ä±ú main window handle
+	bool      mAppPaused = false;  // AppÍ£Ö¹×´Ì¬is the application paused?
+	bool      mMinimized = false;  // ÊÇ·ñ×îĞ¡»¯is the application minimized?
+	bool      mMaximized = false;  // ÊÇ·ñ×î´ó»¯is the application maximized?
+	bool      mResizing = false;   // ÊÇ·ñËõ·ÅÍÏ×§are the resize bars being dragged?
+    bool      mFullscreenState = false;// ÊÇ·ñÈ«ÆÁ»¯ fullscreen enabled
 
-	// Set true to use 4X MSAA (§4.1.8).  The default is false.
+	// Set true to use 4X MSAA (?.1.8).  The default is false.
     bool      m4xMsaaState = false;    // 4X MSAA enabled
     UINT      m4xMsaaQuality = 0;      // quality level of 4X MSAA
 
-	// Used to keep track of the “delta-time” and game time (§4.4).
+	// Used to keep track of the
 	GameTimer mTimer;
 	
-    Microsoft::WRL::ComPtr<IDXGIFactory4> mdxgiFactory;
-    Microsoft::WRL::ComPtr<IDXGISwapChain> mSwapChain;
-    Microsoft::WRL::ComPtr<ID3D12Device> md3dDevice;
+    // Ä£°å
+    template <class T> using ComPtr = Microsoft::WRL::ComPtr<T>;
 
-    Microsoft::WRL::ComPtr<ID3D12Fence> mFence;
+    ComPtr<IDXGIFactory4> mdxgiFactory;
+    ComPtr<IDXGISwapChain> mSwapChain;
+    ComPtr<ID3D12Device> md3dDevice;
+
+    ComPtr<ID3D12Fence> mFence;
     UINT64 mCurrentFence = 0;
 	
-    Microsoft::WRL::ComPtr<ID3D12CommandQueue> mCommandQueue;
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> mDirectCmdListAlloc;
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> mCommandList;
+    ComPtr<ID3D12CommandQueue> mCommandQueue;
+    ComPtr<ID3D12CommandAllocator> mDirectCmdListAlloc;
+    ComPtr<ID3D12GraphicsCommandList> mCommandList;
 
 	static const int SwapChainBufferCount = 2;
 	int mCurrBackBuffer = 0;
-    Microsoft::WRL::ComPtr<ID3D12Resource> mSwapChainBuffer[SwapChainBufferCount];
-    Microsoft::WRL::ComPtr<ID3D12Resource> mDepthStencilBuffer;
+    ComPtr<ID3D12Resource> mSwapChainBuffer[SwapChainBufferCount];
+    ComPtr<ID3D12Resource> mDepthStencilBuffer;
 
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mRtvHeap;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> mDsvHeap;
+    ComPtr<ID3D12DescriptorHeap> mRtvHeap;
+    ComPtr<ID3D12DescriptorHeap> mDsvHeap;
 
     D3D12_VIEWPORT mScreenViewport; 
     D3D12_RECT mScissorRect;
@@ -118,6 +121,7 @@ protected:
 	UINT mCbvSrvUavDescriptorSize = 0;
 
 	// Derived class should set these in derived constructor to customize starting values.
+    // ÓÃ»§ÔÚ¸ÄÅÉÉúÀàµÄÅÉÉú¹¹Ôìº¯ÊıÖĞ¶¨ÒåÕâĞ©³õÊ¼Öµ
 	std::wstring mMainWndCaption = L"d3d App";
 	D3D_DRIVER_TYPE md3dDriverType = D3D_DRIVER_TYPE_HARDWARE;
     DXGI_FORMAT mBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;

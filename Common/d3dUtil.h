@@ -53,6 +53,7 @@ inline void d3dSetDebugName(ID3D12DeviceChild* obj, const char* name)
     }
 }
 
+// 从Ansi编码转译到字符串
 inline std::wstring AnsiToWString(const std::string& str)
 {
     WCHAR buffer[512];
@@ -92,6 +93,7 @@ class d3dUtil
 {
 public:
 
+    // 编译Shader、创造Buffer等资源相关的内容
     static bool IsKeyDown(int vkeyCode);
 
     static std::string ToString(HRESULT hr);

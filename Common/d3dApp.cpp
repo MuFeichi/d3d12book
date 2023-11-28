@@ -18,6 +18,7 @@ MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 D3DApp* D3DApp::mApp = nullptr;
+
 D3DApp* D3DApp::GetApp()
 {
     return mApp;
@@ -71,6 +72,7 @@ void D3DApp::Set4xMsaaState(bool value)
 
 int D3DApp::Run()
 {
+	// 运行主题逻辑，处理Windows消息 或者进行渲染
 	MSG msg = {0};
  
 	mTimer.Reset();
@@ -106,6 +108,7 @@ int D3DApp::Run()
 
 bool D3DApp::Initialize()
 {
+	// 必须完成初始化 windows和D3D两部分
 	if(!InitMainWindow())
 		return false;
 
@@ -140,21 +143,21 @@ void D3DApp::CreateRtvAndDsvDescriptorHeaps()
 
 void D3DApp::OnResize()
 {
+	// 判断设备相关状态
 	assert(md3dDevice);
 	assert(mSwapChain);
     assert(mDirectCmdListAlloc);
 
-	// Flush before changing any resources.
+	// 清空渲染队列，清空完成后重置allocator
 	FlushCommandQueue();
-
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-	// Release the previous resources we will be recreating.
+	// 释放掉交换链和DS的资源，后续重建
 	for (int i = 0; i < SwapChainBufferCount; ++i)
 		mSwapChainBuffer[i].Reset();
     mDepthStencilBuffer.Reset();
 	
-	// Resize the swap chain.
+	// 缩放交换链buffer大小
     ThrowIfFailed(mSwapChain->ResizeBuffers(
 		SwapChainBufferCount, 
 		mClientWidth, mClientHeight, 
@@ -216,7 +219,7 @@ void D3DApp::OnResize()
 	mCommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(mDepthStencilBuffer.Get(),
 		D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_DEPTH_WRITE));
 	
-    // Execute the resize commands.
+    // Execute the resize commands 执行重置命令
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
     mCommandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
@@ -237,6 +240,7 @@ void D3DApp::OnResize()
  
 LRESULT D3DApp::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+	// 统一处理WIN32的消息，Case用于分支，Case后面跟的是应用程序自动返回的状态编码
 	switch( msg )
 	{
 	// WM_ACTIVATE is sent when the window is activated or deactivated.  
@@ -584,7 +588,7 @@ void D3DApp::CalculateFrameStats()
 
 	frameCnt++;
 
-	// Compute averages over one second period.
+	// 1秒为周期来计算平均帧数以及每帧的平均渲染时间
 	if( (mTimer.TotalTime() - timeElapsed) >= 1.0f )
 	{
 		float fps = (float)frameCnt; // fps = frameCnt / 1
