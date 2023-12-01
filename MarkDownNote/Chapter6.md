@@ -317,7 +317,7 @@ mCmdList->DrawIndexedInstanced(numCylIndices, 1, firstCylIndex, firstCylVertexPo
 2. CPP 可以输入前面所有匹配数据，多的数据可以额外输入，但是没有用
 3. 类型可以不同，比如 float 和 int，D3D允许对register中的数据重新解释，会有警告
 
-
+ 
 
 # 像素着色器示例
 
@@ -328,4 +328,52 @@ mCmdList->DrawIndexedInstanced(numCylIndices, 1, firstCylIndex, firstCylVertexPo
 
 
 # 常量缓冲区
+
+constant buffer也是一种GPU资源（ID3D12Resource）
+常量缓冲区通常由CPU每帧更新一次，所以constant buffer创建在upload heap中而非 default heap中，CPU可以更新
+Constant buffer对硬件有要求，大小必须是硬件最小分配空间（256B）的整数倍
+
+```C++
+struct ObjectConstants
+{
+    DirectX::XMFLOAT4X4 WorldViewProj = MathHelper::Identity4x4();
+};
+// 创建缓冲区资源，利用它存储 NumElements 个常量缓冲区
+UINT mElementByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+// 可以认为mUploadCBuffer中存放了一个ObjectConstants类型的constant buffer 数组
+// Constant Buffer View绑定到 存有物体相应常量数据的缓冲区子区域 
+ComPtr<ID3D12Resource> mUploadCBuffer;
+device->CreateCommittedResource(&CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+	D3D12_HEAP_FLAG_NONE,
+	&CD3DX12_RESOURCE_DESC::Buffer(mElementByteSize * NumElements),
+	D3D12_RESOURCE_STATE_GENERIC_READ,
+	nullptr,
+	IID_PPV_ARGS(&mUploadCBuffer));
+
+UINT d3dUtil::CalcConstantBufferByteSize(UINTbyteSize)
+{
+   	// 凑整满足最小的256的整数倍，byte size + 255
+    // 屏蔽求和结果低于2字节
+    // (300 + 255) & ~255 // 按位取反
+    // 555 & ~255
+    // 0x022B & ~0x00ff 
+    // 0x022B & 0ff00 // 按位与
+    // 0x0200 = 512
+	return (byteSize + 255) & ˜255;
+}
+```
+
+HLSL中会隐式的填充位256B
+D3D12的特殊语法，通过结构体声明，而不是cbuffef进行声明
+
+```C++
+struct ObjectConstants
+{
+    float4x4 gWorldViewProj;
+    uint matIndex;
+};
+ConstantBuffer<ObjectConstants> gObjConstants : register(b0);
+
+uint index = gObjConstants.matIndex;
+```
 
