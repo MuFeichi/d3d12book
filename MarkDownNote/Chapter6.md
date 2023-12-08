@@ -382,7 +382,7 @@ uint index = gObjConstants.matIndex;
 需要获取 指向更新资源数据的指针
 
 ```c++
-// Map方法，用于获取指向 需要更新资源数据的指针
+// Map方法，用于获取指向 需要更新资源数据的指针。还有一个拒绝GPU访问的作用
 ComPtr<ID3D12Resource> mUploadBuffer;
 BYTE* mMappedData = nullptr;
 
@@ -394,7 +394,7 @@ mUploadBuffer->Map(0, nullptr,reinterpret_cast<void**>(&mMappedData));
 // memcpy从 系统内存复制到常量缓冲区，CPU将数据从内存拷贝到GPU
 memcpy(mMappedData, &data, dataSizeInBytes);
 
-//更新完成后，释放映射内存前需要 unmap 取消映射
+//更新完成后，释放映射内存前需要 unmap 取消映射，清除指针+启动GPU的访问权限
 if(mUploadBuffer != nullptr)
     mUploadBuffer->Unmap(0, nullptr); // subresource资源 + 内存范围映射
 mMappedData = nullptr;
@@ -409,17 +409,17 @@ template<typename T>
 class UploadBuffer
 {
 public:
+    // uploadbuffer可以用于其他用途，比如顶点缓冲区的更新
+    // isConstantBuffer 用于区分是否是constantbuffer
     UploadBuffer(ID3D12Device* device, UINT elementCount, bool isConstantBuffer) : 
         mIsConstantBuffer(isConstantBuffer)
     {
         mElementByteSize = sizeof(T);
 
-        // Constant buffer elements need to be multiples of 256 bytes.
-        // This is because the hardware can only view constant data 
-        // at m*256 byte offsets and of n*256 byte lengths. 
+        // Cbuffer必须是256的倍数，
         // typedef struct D3D12_CONSTANT_BUFFER_VIEW_DESC {
-        // UINT64 OffsetInBytes; // multiple of 256
-        // UINT   SizeInBytes;   // multiple of 256
+        // UINT64 OffsetInBytes; // 偏移 256整数倍 (内存偏移)
+        // UINT   SizeInBytes;   // 数据大小 256整数倍
         // } D3D12_CONSTANT_BUFFER_VIEW_DESC;
         if(isConstantBuffer)
             mElementByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(T));
@@ -433,18 +433,15 @@ public:
             IID_PPV_ARGS(&mUploadBuffer)));
 
         ThrowIfFailed(mUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mMappedData)));
-
-        // We do not need to unmap until we are done with the resource.  However, we must not write to
-        // the resource while it is in use by the GPU (so we must use synchronization techniques).
+        // 只要修改资源就不需要取消map
+        // 资源被GPU试用期间，不能向资源进行写操作，需要同步 list queue
     }
-
     UploadBuffer(const UploadBuffer& rhs) = delete;
     UploadBuffer& operator=(const UploadBuffer& rhs) = delete;
     ~UploadBuffer()
     {
         if(mUploadBuffer != nullptr)
             mUploadBuffer->Unmap(0, nullptr);
-
         mMappedData = nullptr;
     }
 
@@ -452,7 +449,7 @@ public:
     {
         return mUploadBuffer.Get();
     }
-
+	// 系统内存复制到常量缓冲区
     void CopyData(int elementIndex, const T& data)
     {
         memcpy(&mMappedData[elementIndex*mElementByteSize], &data, sizeof(T));
@@ -461,7 +458,6 @@ public:
 private:
     Microsoft::WRL::ComPtr<ID3D12Resource> mUploadBuffer;
     BYTE* mMappedData = nullptr;
-
     UINT mElementByteSize = 0;
     bool mIsConstantBuffer = false;
 };
