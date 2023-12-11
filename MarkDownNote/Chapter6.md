@@ -463,3 +463,447 @@ private:
 };
 ```
 
+示例：每一帧更具鼠标移动更新，world view projection 矩阵
+
+```c++
+void BoxApp::OnMouseMove(WPARAM btnState, int x, inty)
+{
+    if((btnState & MK_LBUTTON) != 0)
+    {
+        // 根据鼠标的移动距离计算旋转角度，每个像素按照此角度的1/4进行旋转
+        float dx = XMConvertToRadians(0.25f*static_cast<float> (x - mLastMousePos.x));
+        float dy = XMConvertToRadians(0.25f*static_cast<float> (y - mLastMousePos.y));
+        // 鼠标输入更新摄像机绕立方体旋转的角度
+        mTheta += dx;
+        mPhi += dy;
+        // 限制mpi的范围
+        mPhi = MathHelper::Clamp(mPhi, 0.1f, MathHelper::Pi - 0.1f);
+    }
+    else if((btnState & MK_RBUTTON) != 0)
+    {
+        // 场景中的每个像素 按鼠标移动距离的0.005倍进行缩放
+        float dx = 0.005f*static_cast<float>(x - mLastMousePos.x);
+        float dy = 0.005f*static_cast<float>(y - mLastMousePos.y);
+        // 鼠标的输入更新摄像机的可视半径
+        mRadius += dx - dy;
+        // 限制可视半径范围
+        mRadius = MathHelper::Clamp(mRadius, 3.0f, 15.0f);
+    }
+    mLastMousePos.x = x;
+    mLastMousePos.y = y;
+}
+
+void BoxApp::Update(const GameTimer& gt)
+{
+    // 球面坐标 转到 笛卡尔坐标(xyz)
+    float x = mRadius*sinf(mPhi)*cosf(mTheta);
+    float z = mRadius*sinf(mPhi)*sinf(mTheta);
+    float y = mRadius*cosf(mPhi);
+    // 构建观察矩阵
+    XMVECTOR pos = XMVectorSet(x, y, z, 1.0f);
+    XMVECTOR target = XMVectorZero();
+    XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
+    XMStoreFloat4x4(&mView, view);
+    XMMATRIX world = XMLoadFloat4x4(&mWorld);
+    XMMATRIX proj = XMLoadFloat4x4(&mProj);
+    XMMATRIX worldViewProj = world*view*proj;
+    // 更新 cbuffer
+    ObjectConstants objConstants;
+    XMStoreFloat4x4(&objConstants.WorldViewProj, XMMatrixTranspose(WorldViewProj));
+    // mObjectCB 指针
+    mObjectCB->CopyData(0, objConstants);
+}
+```
+
+常量缓冲区描述符
+
+存放在：D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV  混合堆，可以存放constant buffer，shader，unordered access
+
+```c++
+D3D12_DESCRIPTOR_HEAP_DESC cbvHeapDesc;
+cbvHeapDesc.NumDescriptors = 1;
+cbvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+// 区别，指示它绑定到命令列表以供着色器引用
+cbvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+cbvHeapDesc.NodeMask = 0;
+ComPtr<ID3D12DescriptorHeap> mCbvHeap
+md3dDevice->CreateDescriptorHeap(&cbvHeapDesc, IID_PPV_ARGS(&mCbvHeap));
+
+struct ObjectConstants
+{
+    XMFLOAT4X4 WorldViewProj = MathHelper::Identity4x4();
+};
+// 常量缓冲区存放了绘制n个物体需要的常量数据
+std::unique_ptr<UploadBuffer<ObjectConstants>>
+mObjectCB = nullptr;
+mObjectCB =std::make_unique<UploadBuffer<ObjectConstants>>(md3dDevice.Get(), n, true);
+UINT objCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+// 缓冲区的起始地址
+D3D12_GPU_VIRTUAL_ADDRESS cbAddress = mObjectCB->Resource()->GetGPUVirtualAddress();
+// 偏移到常量缓冲区中绘制第i个物体的数据
+int boxCBufIndex = i;
+cbAddress += boxCBufIndex*objCBByteSize;
+
+// heap -> 缓冲区描述实例 ->创建 view
+// View描述的是绑定到 hlsl cbuffer的资源子集
+D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
+cbvDesc.BufferLocation = cbAddress;
+cbvDesc.SizeInBytes = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+md3dDevice->CreateConstantBufferView(&cbvDesc, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
+```
+
+RootSignature 和 描述符表
+
+资源绑定到 reader pipeline = 不同类型的资源，绑定到特定的 寄存器槽，register slot
+常量缓冲区b0，纹理t0，采样器s0
+
+Root Signature：执行绘制命令前，已经被绑定pipeline的资源，映射到着色器对应输入寄存器
+签名需要与使用它的做着色器兼容：根签名需要为Shader提供所有需要绑定的资源![image-20231211145210930](./TextureCache/image-20231211145210930.png)
+
+ID3D12RootSignature，描述绘制调用过程中Shader所需资源的root parameter定义
+Parameter可以是 root constant，root descriptor，或者 descriptor table
+
+```C++
+// 参数类型可以是常数，描述或者描述符表
+CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+// 创建一个 只有一个 CBV 的描述符表
+CD3DX12_DESCRIPTOR_RANGE cbvTable;
+// table type，描述符数量，描述符区域绑定到base shader register,绑定到b0
+cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV,1, 0);
+// 描述符数量，指向描述符表的指针
+slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable);
+
+// Root Signature 由 array of root parameter 构成
+CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(1, slotRootParameter, 0, nullptr,
+D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+// 创建仅包含一个slot的rootsignature，slot指向仅由 单个cbuffer组成的 描述符区域
+ComPtr<ID3DBlob> serializedRootSig = nullptr;
+ComPtr<ID3DBlob> errorBlob = nullptr;
+
+HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc,
+	D3D_ROOT_SIGNATURE_VERSION_1,
+	serializedRootSig.GetAddressOf(), 
+//D3D12规定，必须先将 Root Signature 的 描述符布局进行 serialize，待其转化为以ID3DBlob接口表示的序列化数据格式后，传入CreateSignature 创建Root Signature                                        
+	errorBlob.GetAddressOf());
+
+ThrowIfFailed(md3dDevice->CreateRootSignature( 0,
+	serializedRootSig->GetBufferPointer(),
+	serializedRootSig->GetBufferSize(),
+	IID_PPV_ARGS(&mRootSignature)));
+```
+
+Root Signature 只是说明绑定，而非有具体的绑定操作。command list先设置好根签名，然后再set绑定描述符表
+
+```c++
+void ID3D12GraphicsCommandList::SetGraphicsRootDescriptorTable(
+    UINT RootParameterIndex, // 根参数按照此 index(想要绑定的register slot编号)进行设置
+	D3D12_GPU_DESCRIPTOR_HANDLE BaseDescriptor); //Table中第一个 描述符在描述符堆中的句柄
+
+mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
+ID3D12DescriptorHeap* descriptorHeaps[] = { mCbvHeap.Get() };
+mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+// 偏移到此次绘制所需要的CBV处
+CD3DX12_GPU_DESCRIPTOR_HANDLE cbv(mCbvHeap - >GetGPUDescriptorHandleForHeapStart());
+cbv.Offset(cbvIndex, mCbvSrvUavDescriptorSize);
+mCommandList->SetGraphicsRootDescriptorTable(0, cbv);
+```
+
+1. Root Signature的规模尽量小，减少每帧渲染过程中 root signature的修改次数
+2. Draw绘制调用，或计算调度(分派)dispatch中，有 root signature的内容发生改变时，D3D12会自动更新 root signature的呢绒为最新数据，每次draw和dispatch 都会产生一套独立的 signature 状态
+3. 改了root signature会失去所有的绑定关系，修改后，需要按照新的root signature定义重新绑定资源到 render pipeline上
+
+
+
+# 编译着色器
+
+Shader-> 字节码 -> D3D编译成本针对当前GPU系统优化的本地指令ATI1
+
+```C++
+HRESULT D3DCompileFromFile(
+LPCWSTR pFileName, // 编译HLSL扩展名的源代码文件
+const D3D_SHADER_MACRO *pDefines, // 着色器宏的定义数组结构
+ID3DInclude *pInclude, // 处理 include 相关的宏
+LPCSTR pEntrypoint, // 着色器入口点函数名
+LPCSTR pTarget, // shader版本，5.0 和 5.1
+UINT Flags1, // 编译选项 D3DCOMPILE常量，D3DCOMPILE_DEBUG;D3DCOMPILE_SKIP_OPTIMIZATION
+UINT Flags2, // 编译选项，本文默认为0
+ID3DBlob **ppCode, // 指针存放编译好的字节码
+ID3DBlob **ppErrorMsgs); // 报错字符串
+```
+
+ID3DBlob描述一段普通的内存块
+
+1. LPVOID GetBufferPointer：返回数据 void*类型的指针，
+2.  SIZE_T GetBufferSize： 返回缓冲区的字节大小
+
+```C++
+// 运行时编译
+ComPtr<ID3DBlob> d3dUtil::CompileShader(
+const std::wstring& filename,
+const D3D_SHADER_MACRO* defines,
+const std::string& entrypoint,
+const std::string& target)
+{
+    // 若处于调试模式，则使用调试标志
+    UINT compileFlags = 0;
+#if defined(DEBUG) || defined(_DEBUG)
+    compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+    HRESULT hr = S_OK;
+    
+    ComPtr<ID3DBlob> byteCode = nullptr;
+    ComPtr<ID3DBlob> errors;
+    hr = D3DCompileFromFile(filename.c_str(), defines, D3D_COMPILE_STANDARD_FILE_INCLUDE,
+    	entrypoint.c_str(), target.c_str(), compileFlags,
+    	0, &byteCode, &errors);
+    // 将错误信息输出到调试窗口
+    if(errors != nullptr)
+    	OutputDebugStringA((char*)errors->GetBufferPointer());
+    ThrowIfFailed(hr);
+    return byteCode;
+}
+
+// 编译 Shader VS PS的部分
+ComPtr<ID3DBlob> mvsByteCode = nullptr;
+ComPtr<ID3DBlob> mpsByteCode = nullptr;
+mvsByteCode = d3dUtil::CompileShader(L”Shaders\color.hlsl”, nullptr, “VS”, “vs_5_0”);
+mpsByteCode = d3dUtil::CompileShader(L”Shaders\color.hlsl”, nullptr, “PS”, “ps_5_0”);
+```
+
+离线编译
+CSO：compiled shader object 已编译着色器对象
+FXC：directX自带的命令行编译工具
+![image-20231211155818353](./TextureCache/image-20231211155818353.png)
+
+引用CSO文件，跳过实时编译部分
+
+```C++
+// 标准文件输入机制读取二进制
+ComPtr<ID3DBlob> d3dUtil::LoadBinary(const std::wstring& filename)
+{
+	std::ifstream fin(filename, std::ios::binary);
+	fin.seekg(0, std::ios_base::end);
+	std::ifstream::pos_type size = (int)fin.tellg();
+	fin.seekg(0, std::ios_base::beg);
+    
+    ComPtr<ID3DBlob> blob;
+	ThrowIfFailed(D3DCreateBlob(size,blob.GetAddressOf()));
+	
+    fin.read((char*)blob->GetBufferPointer(), size);
+	fin.close();
+	return blob;
+}
+// 直接拿到字节码
+ComPtr<ID3DBlob> mvsByteCode = d3dUtil::LoadBinary(L”Shaders\color_vs.cso”);
+ComPtr<ID3DBlob> mpsByteCode = d3dUtil::LoadBinary(L”Shaders\color_ps.cso”);
+```
+
+生成着色器汇编代码 FXC可以生成
+
+Visual Studio 支持配置FXC自动编译HLSL，缺点仅允许每个文件中有一个Shader程序，也就是VS和PS不能共存
+
+# 光栅器状态 rasterizer state
+
+```c++
+typedef struct D3D12_RASTERIZER_DESC {
+D3D12_FILL_MODE FillMode; // Default: D3D12_FILL_SOLID
+D3D12_CULL_MODE CullMode; // Default: D3D12_CULL_BACK
+BOOL FrontCounterClockwise; // Default: false
+INT DepthBias; // Default: 0
+FLOAT DepthBiasClamp; // Default: 0.0f
+FLOAT SlopeScaledDepthBias; // Default: 0.0f
+BOOL DepthClipEnable; // Default: true
+BOOL ScissorEnable; // Default: false
+BOOL MultisampleEnable; // Default: false
+BOOL AntialiasedLineEnable; // Default: false
+UINT ForcedSampleCount; // Default: 0
+// Default: D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF
+D3D12_CONSERVATIVE_RASTERIZATION_MODE ConservativeRaster;
+} D3D12_RASTERIZER_DESC;
+
+//D3D12_DEFAULT 用于初始化成员 重载为默认值
+CD3DX12_RASTERIZER_DESC rsDesc(D3D12_DEFAULT);
+rsDesc.FillMode = D3D12_FILL_WIREFRAME;
+rsDesc.CullMode = D3D12_CULL_NONE;
+```
+
+1. Fill mode：线框模式，实体模式渲染
+2. CullMode： 剔除操作，剔除正面、背面、或者不剔除
+3. FrontCounterClockwise：false，根据摄像机的观察视角，顺时针为正面，你是真伪反面，true，则相反
+
+
+
+# 流水线状态对象 PSO
+
+input layout view，VS，PS等等都可以看做是单条流水线的一部分状态，需要将这些对象绑定到pipeline上
+
+```c++
+typedef struct D3D12_GRAPHICS_PIPELINE_STATE_DESC
+{ ID3D12RootSignature *pRootSignature;
+D3D12_SHADER_BYTECODE VS;
+D3D12_SHADER_BYTECODE PS;
+D3D12_SHADER_BYTECODE DS;
+D3D12_SHADER_BYTECODE HS;
+D3D12_SHADER_BYTECODE GS;
+D3D12_STREAM_OUTPUT_DESC StreamOutput;
+D3D12_BLEND_DESC BlendState;
+UINT SampleMask;
+D3D12_RASTERIZER_DESC RasterizerState;
+D3D12_DEPTH_STENCIL_DESC DepthStencilState;
+D3D12_INPUT_LAYOUT_DESC InputLayout;
+D3D12_PRIMITIVE_TOPOLOGY_TYPE PrimitiveTopologyType;
+UINT NumRenderTargets;
+DXGI_FORMAT RTVFormats[8];
+DXGI_FORMAT DSVFormat;
+DXGI_SAMPLE_DESC SampleDesc;
+} D3D12_GRAPHICS_PIPELINE_STATE_DESC;
+```
+
+1. 指向一个与PSO绑定 Root Signature指针，与Shader兼容
+
+2.  VS - PS - DS - HS - GS，Shader绑定，D3D12_SHADER_BYTECODE指定
+
+   ```c++
+   typedef struct D3D12_SHADER_BYTECODE {
+   const BYTE *pShaderBytecode;  //  指向字节码数据的指针
+   SIZE_T BytecodeLength;  // 字节码数据的大小
+   } D3D12_SHADER_BYTECODE;
+   ```
+
+3. Steam Output：流式输出，暂时清空。需要用[D3D12_STREAM_OUTPUT_DESC](https://learn.microsoft.com/zh-cn/windows/win32/api/d3d12/ns-d3d12-d3d12_stream_output_desc)
+
+4. Blend State：混合操作状态 [D3D12_BLEND_DESC](https://learn.microsoft.com/zh-cn/windows/win32/api/d3d12/ns-d3d12-d3d12_blend_desc)
+
+5. SampleMask： 多重采样点位采样情况（D3D文档是blend state的mask）
+
+6. RasterizerState：光栅化阶段状态
+
+7. DepthStencilState：深度缓冲区状态
+
+8. InputLayout： 输入的布局描述
+
+9. PrimitiveTopologyType：图元拓扑类型
+
+10.  NumRenderTargets：同时所用的RT的数量，RTVFormats
+
+11.  DSVFormat： DS格式
+
+12.  SampleDesc：描述多重采样对每个像素采样的数量和质量级别
+
+```c++
+ComPtr<ID3D12RootSignature> mRootSignature;
+std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
+ComPtr<ID3DBlob> mvsByteCode;
+ComPtr<ID3DBlob> mpsByteCode;
+… 
+D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
+ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
+psoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
+psoDesc.pRootSignature = mRootSignature.Get();
+
+psoDesc.VS =
+{
+    reinterpret_cast<BYTE*>(mvsByteCode-
+    >GetBufferPointer()),
+    mvsByteCode->GetBufferSize()
+};
+
+psoDesc.PS =
+{
+    reinterpret_cast<BYTE*>(mpsByteCode-
+    >GetBufferPointer()),
+    mpsByteCode->GetBufferSize()
+};
+psoDesc.RasterizerState = CD3D12_RASTERIZER_DESC(D3D12_DEFAULT);
+psoDesc.BlendState = CD3D12_BLEND_DESC(D3D12_DEFAULT);
+psoDesc.DepthStencilState = CD3D12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+psoDesc.SampleMask = UINT_MAX;
+psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+psoDesc.NumRenderTargets = 1;
+psoDesc.RTVFormats[0] = mBackBufferFormat;
+psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+psoDesc.DSVFormat = mDepthStencilFormat;
+ComPtr<ID3D12PipelineState> mPSO;
+md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
+```
+
+D3D11中是分开配置的，没有总体设置的，驱动程序可能为了一个相关的独立状态对硬件重新进行编程
+D3D12中变为一个集合，这个集合的好处是提升前生成硬件的本地指令和状态
+
+PSO的验证、创建操作比较花费时间，初始化期间生成PSO，第一次引用，之都存在哈希表集合中
+
+并非所有的状态都会封装在PSO内，比如viewport，scissor rectangle剪裁矩形
+D3D本身是个状态机，保持各自的状态
+
+PSO与command list绑定，在设置另一个PSO或者重置list之前，会一直延续当前PSO
+性能就是PSO切换最小次数原则，尽量使用相同的PSO绘制物体
+
+# 几何体图形辅助结构体
+
+定义一些常用的几何操作
+
+```C++
+// 提供vertex buffer，index buffer中单个几何体绘制需要的数据和偏移量
+struct SubmeshGeometry
+{
+    UINT IndexCount = 0;
+    UINT StartIndexLocation = 0;
+    INT BaseVertexLocation = 0;
+    // 包围盒
+    DirectX::BoundingBox Bounds;
+};
+
+struct MeshGeometry
+{
+    // 名称
+    std::string Name;
+    
+    //系统内存中的副本。 泛型，等到使用时转换为合适的类型
+    Microsoft::WRL::ComPtr<ID3DBlob> VertexBufferCPU = nullptr;
+    Microsoft::WRL::ComPtr<ID3DBlob> IndexBufferCPU = nullptr;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> VertexBufferGPU = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> IndexBufferGPU = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> VertexBufferUploader = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12Resource> IndexBufferUploader = nullptr;
+    // buffer相关的数据，比如字节大小等
+    UINT VertexByteStride = 0;
+    UINT VertexBufferByteSize = 0;
+    DXGI_FORMAT IndexFormat = DXGI_FORMAT_R16_UINT;
+    UINT IndexBufferByteSize = 0;
+
+    // 一个结构体 -> 一组index vertex buffer -> 多个几何体
+    // 容器存放，单独绘制其中的子网格体
+    std::unordered_map<std::string, SubmeshGeometry>	DrawArgs;
+    
+    D3D12_VERTEX_BUFFER_VIEW VertexBufferView()const
+    {
+        D3D12_VERTEX_BUFFER_VIEW vbv;
+        vbv.BufferLocation = VertexBufferGPU-
+        >GetGPUVirtualAddress();
+        vbv.StrideInBytes = VertexByteStride;
+        vbv.SizeInBytes = VertexBufferByteSize;
+        return vbv;
+    }
+    
+    D3D12_INDEX_BUFFER_VIEW IndexBufferView()const
+    {
+        D3D12_INDEX_BUFFER_VIEW ibv;
+        ibv.BufferLocation = IndexBufferGPU-
+        >GetGPUVirtualAddress();
+        ibv.Format = IndexFormat;
+        ibv.SizeInBytes = IndexBufferByteSize;
+        return ibv;
+    }
+    // 带数据上传到GPU后，释放这些内存
+    void DisposeUploaders()
+    {
+        VertexBufferUploader = nullptr;
+        IndexBufferUploader = nullptr;
+    }
+};
+```
+
